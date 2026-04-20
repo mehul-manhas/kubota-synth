@@ -1,0 +1,44 @@
+# ---------------------------------------------------------------------------
+# kubota-synth: synthesizer configuration
+# ---------------------------------------------------------------------------
+# `defaults` are applied to every table and may be overridden per-table.
+# ---------------------------------------------------------------------------
+
+defaults:
+  synthesizer: GaussianCopula
+  sample_rows: 10000
+  fit_sample_size: 500000
+  random_seed: 42
+
+tables:
+  bronze_placements:
+    synthesizer: PAR
+    sequence_key: medium
+    sequence_index: placement_date
+    sample_rows: 50000
+
+  bronze_impressions:
+    synthesizer: CTGAN
+    sample_rows: 200000
+    epochs: 300
+
+  bronze_campaigns:
+    synthesizer: GaussianCopula
+    sample_rows: 500
+
+  silver_funnel_events:
+    synthesizer: CTGAN
+    sample_rows: 100000
+    epochs: 200
+
+# SDV multi-table relationships (optional). Example:
+#   - parent_table_name: bronze_campaigns
+#     parent_primary_key: campaign_id
+#     child_table_name: bronze_placements
+#     child_foreign_key: campaign_id
+relationships: []
+
+output:
+  write_mode: append
+  batch_size: 10000
+  target_schema: dbo

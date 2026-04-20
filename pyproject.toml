@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kubota-synth"
+version = "0.1.0"
+description = "Synthetic data generator for the Kubota marketing analytics platform (SDV + MSSQL)."
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+license = { text = "MIT" }
+authors = [
+    { name = "Kubota Analytics" },
+]
+keywords = ["sdv", "synthetic-data", "mssql", "kubota", "analytics"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+dependencies = [
+    "sdv>=1.17,<2.0",
+    "pandas>=2.0,<3.0",
+    "numpy>=1.26,<2.0",
+    "pyodbc>=5.0",
+    "sqlalchemy>=2.0,<3.0",
+    "torch>=2.0",
+    "pyyaml>=6.0",
+    "click>=8.1",
+    "python-dotenv>=1.0",
+    "tqdm>=4.65",
+    "rich>=13.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "ruff>=0.4",
+    "ipython>=8.0",
+]
+
+[project.scripts]
+kubota-synth = "kubota_synth.cli:cli"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

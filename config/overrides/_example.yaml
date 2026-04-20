@@ -1,0 +1,50 @@
+# ---------------------------------------------------------------------------
+# Per-table override template
+# ---------------------------------------------------------------------------
+# Copy this file to `<table_name>.yaml` (e.g. `bronze_placements.yaml`) inside
+# this folder. The file is merged into the metadata produced by the MSSQL
+# introspector for that table. Anything you do not list here is left alone.
+# ---------------------------------------------------------------------------
+
+# Override / force the sdtype of individual columns.
+# Valid sdtypes: numerical | categorical | boolean | datetime | text | id
+columns:
+  # placement_id:
+  #   sdtype: id
+  # medium:
+  #   sdtype: categorical
+  # impressions:
+  #   sdtype: numerical
+  #   computer_representation: Int64
+  # placement_date:
+  #   sdtype: datetime
+  #   datetime_format: "%Y-%m-%d"
+  # landing_url:
+  #   sdtype: text
+
+# SDV constraints. Any constraint listed in
+# `sdv.single_table.base.BaseSingleTableSynthesizer.add_constraints` works.
+# See https://docs.sdv.dev/sdv/single-table-data/modeling/customizations
+constraints:
+  # - constraint_class: Positive
+  #   constraint_parameters:
+  #     column_name: impressions
+  #     strict_boundaries: false
+  #
+  # - constraint_class: Inequality
+  #   constraint_parameters:
+  #     low_column_name: start_date
+  #     high_column_name: end_date
+  #
+  # - constraint_class: ScalarRange
+  #   constraint_parameters:
+  #     column_name: ctr
+  #     low_value: 0
+  #     high_value: 1
+  #     strict_boundaries: false
+  #
+  # - constraint_class: FixedCombinations
+  #   constraint_parameters:
+  #     column_names:
+  #       - country
+  #       - region
