@@ -1,54 +1,92 @@
 # ---------------------------------------------------------------------------
-# Business relationships -- post-processing rules
+# Business relationships -- post-processing rules (after SDV, before write)
 # ---------------------------------------------------------------------------
-# These rules are applied AFTER SDV has sampled each table independently.
-# They let you encode domain knowledge that SDV cannot infer on its own:
-#   * "Leads are ~0.3% of impressions (same day / same channel)"
-#   * "Ag equipment demand peaks in spring and fall"
+# Grounded in ktc-marketshare-backend-services marketing code paths:
+#   - Dashboard bronze -> gold: services/marketing/dashboard/model.py
+#     (leads, quotes, dealer_visits, kusa_events, brand_awareness, …)
+#   - Metrics filters: utils/marketing/query_utils.py + metrics/model.py
+#   - Paid media bronze -> silver: pipelines/marketing/paid_media/ingestion/model.py
+#     (moroch_daily -> moroch_metrics silver; spend/impressions/clicks on `date`)
+#   - Email bronze: pipelines/marketing/email/orchestrator.py (activity tables share
+#     campaign_id, activity_date — SDV does not preserve FKs; no email funnel here)
+#   - Social: pipelines/marketing/social_media/model.py (profiles -> daily_metrics -> posts)
+#   - Platinum union: pipelines/marketing/awareness/model.py (gold facts -> fact_marketing_performance)
 #
-# Edit the numbers with your actual funnel conversion rates and seasonality.
+# Funnel rules need identical join_on column names on driver and downstream frames.
+# Materialize `month` on marketing_impressions_engagement (e.g. from `date`) to match
+# leads/quotes/dealer_visits, which use `month` in query_utils.
 # ---------------------------------------------------------------------------
 
 funnel_chains:
-  - name: paid_media_funnel
+  - name: marketing_dashboard_funnel
     description: >
-      Impressions drive leads drive quotes. Downstream volumes are scaled
-      so the total matches driver_volume * sampled_conversion_rate per
-      (join_on) group.
-    driver_table: bronze_impressions
-    driver_metric_column: impression_count
+      Marketing Dashboard Excel path: media impressions vs BMK leads and iKQ quotes
+      at calendar month grain (see dashboard refresh_gold_leads_monthly / quotes_monthly).
+    driver_table: marketing_impressions_engagement
+    driver_metric_column: impressions
     downstream:
-      - table: bronze_leads
-        metric_column: lead_count
+      - table: leads
+        metric_column: record_count
         conversion_rate:
-          mean: 0.003          # ~0.3% of impressions -> leads
+          mean: 0.003
           std: 0.001
-        join_on: [date, channel]
-      - table: bronze_quotes
-        metric_column: quote_count
+        join_on: [month]
+      - table: quotes
+        metric_column: record_count
         conversion_rate:
-          mean: 0.15           # ~15% of leads -> quotes
-          std: 0.05
-        join_on: [date, channel]
+          mean: 0.0005
+          std: 0.0002
+        join_on: [month]
+
+  - name: consideration_visits_funnel
+    description: >
+      Same awareness-to-consideration story as metrics: dealer web traffic (record_count)
+      scales from paid-media impressions at month grain. moroch_daily is Domo/Moroch
+      paid media; join_on must exist on both sides — use a shared `month` column
+      (derive from moroch_daily.date).
+    driver_table: moroch_daily
+    driver_metric_column: impressions
+    downstream:
+      - table: dealer_visits
+        metric_column: record_count
+        conversion_rate:
+          mean: 0.0002
+          std: 0.0001
+        join_on: [month]
 
 # ---------------------------------------------------------------------------
-# Seasonality: multiply metric columns by a per-month coefficient.
+# Seasonality: multiply metric columns by a per-month coefficient (month from date).
 # ---------------------------------------------------------------------------
 seasonality:
   - name: ag_equipment_cycle
     description: >
-      Ag equipment demand peaks in spring (prep) and early fall (harvest),
-      troughs in mid-winter. Multipliers are applied to the configured
-      metric column for each table based on the month of its date column.
-    tables: [bronze_impressions, bronze_leads, bronze_quotes]
-    # Column that each table uses to derive the month. Defaults to `date` if
-    # omitted. Add entries here when a table uses a different column name.
-    date_column: date
-    date_columns_per_table: {}
+      Seasonal demand curve for ag equipment (tune multipliers to your regions).
+      date_columns_per_table must exist on generated frames (see query_utils date rules).
+    tables:
+      - marketing_impressions_engagement
+      - moroch_daily
+      - leads
+      - quotes
+      - dealer_visits
+      - ad_attr_dealer_visits
+      - sprout_social_daily_metrics
+    date_column: month
+    date_columns_per_table:
+      marketing_impressions_engagement: date
+      moroch_daily: date
+      leads: month
+      quotes: month
+      dealer_visits: month
+      ad_attr_dealer_visits: month
+      sprout_social_daily_metrics: reporting_date
     metric_columns_per_table:
-      bronze_impressions: impression_count
-      bronze_leads: lead_count
-      bronze_quotes: quote_count
+      marketing_impressions_engagement: impressions
+      moroch_daily: impressions
+      leads: record_count
+      quotes: record_count
+      dealer_visits: record_count
+      ad_attr_dealer_visits: record_count
+      sprout_social_daily_metrics: impressions
     multipliers_by_month:
       "01": 0.7
       "02": 0.8

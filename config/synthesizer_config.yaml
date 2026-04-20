@@ -1,7 +1,13 @@
 # ---------------------------------------------------------------------------
 # kubota-synth: synthesizer configuration
 # ---------------------------------------------------------------------------
-# `defaults` are applied to every table and may be overridden per-table.
+# Tables match dbo_marketing_bronze.* names from
+# ktc-marketshare-backend-services/src/utils/constants.py (MARKETING_BRONZE_SCHEMA).
+# Note: bbdo_metrics is not referenced in constants.py (paid silver is moroch_metrics);
+# included below for parity with the warehouse; drop if your catalog has no such table.
+#
+# Most mapping/dimension tables use `defaults` only (`{}`). High-volume facts
+# override synthesizer / sample_rows / epochs where SDV defaults are too small.
 # ---------------------------------------------------------------------------
 
 defaults:
@@ -11,31 +17,158 @@ defaults:
   random_seed: 42
 
 tables:
-  bronze_placements:
-    synthesizer: PAR
-    sequence_key: medium
-    sequence_index: placement_date
-    sample_rows: 50000
+  acb_dealer: {}
 
-  bronze_impressions:
+  ad_attr_dealer_visits: {}
+
+  bbdo_broadcast: {}
+
+  bbdo_gcm: {}
+
+  bbdo_metrics: {}
+
+  bmk_quotes:
     synthesizer: CTGAN
-    sample_rows: 200000
-    epochs: 300
+    sample_rows: 50000
+    epochs: 150
 
-  bronze_campaigns:
-    synthesizer: GaussianCopula
-    sample_rows: 500
+  brand_awareness: {}
 
-  silver_funnel_events:
+  dealer_visits: {}
+
+  email_bounce: {}
+
+  email_campaign_product_category_mapping: {}
+
+  email_clickthrough: {}
+
+  email_open: {}
+
+  email_send: {}
+
+  email_unsubscribe: {}
+
+  google_trends: {}
+
+  google_trends_kubota_keywords: {}
+
+  ikq_leads:
+    synthesizer: CTGAN
+    sample_rows: 50000
+    epochs: 150
+
+  ikq_quotes:
+    synthesizer: CTGAN
+    sample_rows: 50000
+    epochs: 150
+
+  influencer_posts:
+    synthesizer: CTGAN
+    sample_rows: 40000
+    epochs: 120
+
+  kcc_applications_raw:
+    synthesizer: CTGAN
+    sample_rows: 80000
+    epochs: 150
+
+  kcc_clicks:
+    synthesizer: CTGAN
+    sample_rows: 80000
+    epochs: 150
+
+  kcc_series_product_category_mapping: {}
+
+  kusa_events: {}
+
+  leads:
     synthesizer: CTGAN
     sample_rows: 100000
     epochs: 200
 
-# SDV multi-table relationships (optional). Example:
-#   - parent_table_name: bronze_campaigns
-#     parent_primary_key: campaign_id
-#     child_table_name: bronze_placements
-#     child_foreign_key: campaign_id
+  marketing_attributable_sales: {}
+
+  marketing_impressions_engagement:
+    synthesizer: CTGAN
+    sample_rows: 200000
+    epochs: 300
+
+  moroch_daily:
+    synthesizer: CTGAN
+    sample_rows: 200000
+    epochs: 250
+
+  mykubota_accounts_monthly: {}
+
+  partnership_claims: {}
+
+  partnership_partner_list: {}
+
+  partnership_series_model_mapping: {}
+
+  partnership_verifications: {}
+
+  parts_sales: {}
+
+  pr_campaigns: {}
+
+  pr_placement_type_product_category_mapping: {}
+
+  pr_placements:
+    synthesizer: CTGAN
+    sample_rows: 60000
+    epochs: 150
+
+  product_category: {}
+
+  qualtrics_export_jobs: {}
+
+  qualtrics_questions_raw: {}
+
+  qualtrics_responses_raw:
+    synthesizer: CTGAN
+    sample_rows: 150000
+    epochs: 200
+
+  qualtrics_surveys_raw: {}
+
+  quotes:
+    synthesizer: CTGAN
+    sample_rows: 100000
+    epochs: 200
+
+  social_sentiment: {}
+
+  sov: {}
+
+  sponsorships: {}
+
+  sprout_social:
+    synthesizer: CTGAN
+    sample_rows: 80000
+    epochs: 120
+
+  sprout_social_daily_metrics:
+    synthesizer: CTGAN
+    sample_rows: 120000
+    epochs: 180
+
+  sprout_social_posts:
+    synthesizer: PAR
+    sequence_key: customer_profile_id
+    sequence_index: created_time
+    sample_rows: 80000
+
+  sprout_social_profiles: {}
+
+  telematics_monthly: {}
+
+  tier: {}
+
+  trade_show_sales_match: {}
+
+  trends_keyword_category_mapping: {}
+
 relationships: []
 
 output:

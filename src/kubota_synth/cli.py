@@ -22,7 +22,7 @@ from rich.table import Table
 
 from kubota_synth.config import ProjectConfig, load_config
 from kubota_synth.extract.data_loader import DataLoader
-from kubota_synth.extract.introspect import build_sdv_metadata
+from kubota_synth.extract.introspect import MissingTablesError, build_sdv_metadata
 from kubota_synth.load.mssql_writer import write_synthetic
 from kubota_synth.postprocess.relationships import (
     apply_relationships,
@@ -149,14 +149,23 @@ def introspect(config_path: str, output_path: str) -> None:
 
     console.print(
         f"[bold]Introspecting[/bold] {len(tables)} table(s) on "
-        f"[cyan]{cfg.source.server}/{cfg.source.database}[/cyan]..."
+        f"[cyan]{cfg.source.server}/{cfg.source.database}[/cyan] "
+        f"(schema [cyan]{cfg.source.schema}[/cyan])..."
     )
-    metadata = build_sdv_metadata(
-        tables,
-        cfg.source,
-        schema=cfg.source.schema,
-        overrides_dir=cfg.overrides_dir,
-    )
+    try:
+        metadata = build_sdv_metadata(
+            tables,
+            cfg.source,
+            schema=cfg.source.schema,
+            overrides_dir=cfg.overrides_dir,
+        )
+    except MissingTablesError as exc:
+        console.print(f"[bold red]Introspection failed:[/bold red] {exc}")
+        console.print(
+            "[dim]Fix the table names in your synthesizer config (or set "
+            "SOURCE_SCHEMA in .env) and re-run.[/dim]"
+        )
+        sys.exit(2)
 
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)

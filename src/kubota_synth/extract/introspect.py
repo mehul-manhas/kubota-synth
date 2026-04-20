@@ -7,6 +7,7 @@ multi-table ``Metadata.load_from_dict``.
 
 from __future__ import annotations
 
+import difflib
 import logging
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,44 @@ from sqlalchemy.engine import Engine
 from kubota_synth.config import ConnectionConfig
 
 logger = logging.getLogger(__name__)
+
+
+class MissingTablesError(RuntimeError):
+    """Raised when requested tables are absent from the source schema."""
+
+    def __init__(
+        self,
+        schema: str,
+        missing: list[str],
+        available: list[str],
+        suggestions: dict[str, list[str]],
+    ) -> None:
+        self.schema = schema
+        self.missing = missing
+        self.available = available
+        self.suggestions = suggestions
+        super().__init__(self._format_message())
+
+    def _format_message(self) -> str:
+        lines = [
+            f"{len(self.missing)} table(s) not found in schema '{self.schema}':",
+        ]
+        for name in self.missing:
+            hint = self.suggestions.get(name) or []
+            if hint:
+                lines.append(f"  - {name}    (did you mean: {', '.join(hint)}?)")
+            else:
+                lines.append(f"  - {name}")
+        if self.available:
+            preview = ", ".join(self.available[:20])
+            more = "" if len(self.available) <= 20 else f" (+{len(self.available) - 20} more)"
+            lines.append(f"Tables available in '{self.schema}': {preview}{more}")
+        else:
+            lines.append(
+                f"No tables are visible in schema '{self.schema}'. "
+                "Check SOURCE_SCHEMA and the connected user's permissions."
+            )
+        return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +136,34 @@ class MSSQLIntrospector:
         self.close()
 
     # -- schema queries -----------------------------------------------------
+
+    def list_tables(self) -> list[str]:
+        """Return every base-table name in ``self.schema`` (sorted)."""
+        sql = text(
+            """
+            SELECT TABLE_NAME
+            FROM INFORMATION_SCHEMA.TABLES
+            WHERE TABLE_SCHEMA = :schema
+              AND TABLE_TYPE = 'BASE TABLE'
+            ORDER BY TABLE_NAME
+            """
+        )
+        with self.engine.connect() as cn:
+            rows = cn.execute(sql, {"schema": self.schema}).fetchall()
+        return [r[0] for r in rows]
+
+    def table_exists(self, table: str) -> bool:
+        """Return ``True`` if ``schema.table`` exists as a base table or view."""
+        sql = text(
+            """
+            SELECT COUNT(*)
+            FROM INFORMATION_SCHEMA.TABLES
+            WHERE TABLE_SCHEMA = :schema AND TABLE_NAME = :table
+            """
+        )
+        with self.engine.connect() as cn:
+            count = cn.execute(sql, {"schema": self.schema, "table": table}).scalar()
+        return bool(count)
 
     def list_columns(self, table: str) -> list[dict[str, Any]]:
         """Return metadata for every column in ``schema.table``."""
@@ -297,11 +364,34 @@ def build_sdv_metadata(
     schema: str | None = None,
     overrides_dir: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Return a full SDV V1 multi-table metadata dict for ``tables``."""
+    """Return a full SDV V1 multi-table metadata dict for ``tables``.
+
+    Raises
+    ------
+    MissingTablesError
+        If any requested table is not present in the source schema. The error
+        includes the list of available tables and (where possible) a
+        ``difflib`` suggestion for each missing name.
+    """
     overrides_path = Path(overrides_dir) if overrides_dir else None
 
     introspector = MSSQLIntrospector(conn, schema=schema)
     try:
+        available = introspector.list_tables()
+        available_set = set(available)
+        missing = [t for t in tables if t not in available_set]
+        if missing:
+            suggestions = {
+                name: difflib.get_close_matches(name, available, n=3, cutoff=0.6)
+                for name in missing
+            }
+            raise MissingTablesError(
+                schema=introspector.schema,
+                missing=missing,
+                available=available,
+                suggestions=suggestions,
+            )
+
         tables_meta: dict[str, Any] = {}
         for table in tables:
             override = _load_override(overrides_path, table) if overrides_path else {}
