@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import difflib
 import logging
+import time
 from pathlib import Path
 from typing import Any
 
@@ -119,11 +120,22 @@ class MSSQLIntrospector:
     @property
     def engine(self) -> Engine:
         if self._engine is None:
+            logger.debug(
+                "MSSQLIntrospector: engine for %s/%s schema=%s",
+                self.conn.server,
+                self.conn.database,
+                self.schema,
+            )
             self._engine = create_engine(self.conn.sqlalchemy_url(), pool_pre_ping=True)
         return self._engine
 
     def close(self) -> None:
         if self._engine is not None:
+            logger.debug(
+                "MSSQLIntrospector: disposing engine for %s/%s",
+                self.conn.server,
+                self.conn.database,
+            )
             try:
                 self._engine.dispose()
             finally:
@@ -374,6 +386,12 @@ def build_sdv_metadata(
         ``difflib`` suggestion for each missing name.
     """
     overrides_path = Path(overrides_dir) if overrides_dir else None
+    t0 = time.perf_counter()
+    logger.info(
+        "build_sdv_metadata: %d table(s), overrides_dir=%s",
+        len(tables),
+        overrides_path.resolve() if overrides_path else "(none)",
+    )
 
     introspector = MSSQLIntrospector(conn, schema=schema)
     try:
@@ -394,7 +412,15 @@ def build_sdv_metadata(
 
         tables_meta: dict[str, Any] = {}
         for table in tables:
+            tbl_t0 = time.perf_counter()
+            logger.info("Introspecting table [%s].[%s]...", introspector.schema, table)
             override = _load_override(overrides_path, table) if overrides_path else {}
+            if override:
+                logger.debug(
+                    "Table %s: loaded override with keys %s",
+                    table,
+                    list(override.keys()),
+                )
             pk = introspector.get_primary_key(table)
             if pk is None:
                 logger.warning(
@@ -402,16 +428,46 @@ def build_sdv_metadata(
                     introspector.schema,
                     table,
                 )
+            else:
+                logger.debug("Table %s: primary_key=%s", table, pk)
             table_meta = introspector.build_table_metadata(table, pk=pk, override=override)
+            col_count = len(table_meta.get("columns") or {})
+            logger.debug(
+                "Table %s: %d column metadata entr(y|ies) in %.2fs",
+                table,
+                col_count,
+                time.perf_counter() - tbl_t0,
+            )
 
             # Merge user-provided constraints (if any) into the table metadata.
             constraints = override.get("constraints") if isinstance(override, dict) else None
             if constraints:
                 table_meta["_constraints"] = constraints
+                logger.info(
+                    "Table %s: attached %d constraint(s) from overrides.",
+                    table,
+                    len(constraints),
+                )
 
             tables_meta[table] = table_meta
 
+        logger.debug("Discovering foreign keys among configured tables...")
         relationships = introspector.get_foreign_keys(tables)
+        logger.info(
+            "Discovered %d FK relationship(s) among %d table(s) in %.2fs.",
+            len(relationships),
+            len(tables),
+            time.perf_counter() - t0,
+        )
+        if logger.isEnabledFor(logging.DEBUG):
+            for rel in relationships:
+                logger.debug(
+                    "FK %s.%s -> %s.%s",
+                    rel.get("child_table_name"),
+                    rel.get("child_foreign_key"),
+                    rel.get("parent_table_name"),
+                    rel.get("parent_primary_key"),
+                )
     finally:
         introspector.close()
 

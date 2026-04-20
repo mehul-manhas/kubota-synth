@@ -8,6 +8,7 @@ numerics, etc.).
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 import numpy as np
@@ -79,6 +80,13 @@ def validate_table(
     table_metadata: dict[str, Any],
 ) -> dict[str, Any]:
     """Run SDV diagnostics + quality evaluation and return a summary dict."""
+    logger.debug(
+        "validate_table: starting '%s' real_rows=%d synthetic_rows=%d",
+        table_name,
+        len(real_df),
+        len(synthetic_df),
+    )
+    t0 = time.perf_counter()
     md_dict = _strip_internal_fields(table_metadata)
     try:
         metadata = SingleTableMetadata.load_from_dict(md_dict)
@@ -91,6 +99,7 @@ def validate_table(
 
     if metadata is not None and not real_df.empty and not synthetic_df.empty:
         try:
+            d_t0 = time.perf_counter()
             diag = run_diagnostic(
                 real_data=real_df,
                 synthetic_data=synthetic_df,
@@ -98,10 +107,17 @@ def validate_table(
                 verbose=False,
             )
             diagnostic_score = float(diag.get_score())
+            logger.debug(
+                "validate_table: run_diagnostic for '%s' score=%s in %.2fs",
+                table_name,
+                diagnostic_score,
+                time.perf_counter() - d_t0,
+            )
         except Exception as exc:  # noqa: BLE001
             logger.warning("run_diagnostic failed for '%s': %s", table_name, exc)
 
         try:
+            q_t0 = time.perf_counter()
             qual = evaluate_quality(
                 real_data=real_df,
                 synthetic_data=synthetic_df,
@@ -109,10 +125,29 @@ def validate_table(
                 verbose=False,
             )
             quality_score = float(qual.get_score())
+            logger.debug(
+                "validate_table: evaluate_quality for '%s' score=%s in %.2fs",
+                table_name,
+                quality_score,
+                time.perf_counter() - q_t0,
+            )
         except Exception as exc:  # noqa: BLE001
             logger.warning("evaluate_quality failed for '%s': %s", table_name, exc)
 
     issues = _sanity_issues(real_df, synthetic_df)
+    if issues:
+        logger.info(
+            "validate_table: '%s' sanity checks flagged %d issue(s) in %.2fs",
+            table_name,
+            len(issues),
+            time.perf_counter() - t0,
+        )
+    else:
+        logger.debug(
+            "validate_table: '%s' sanity checks passed in %.2fs",
+            table_name,
+            time.perf_counter() - t0,
+        )
 
     return {
         "table": table_name,

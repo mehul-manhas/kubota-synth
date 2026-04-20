@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import math
+import time
 
 import pandas as pd
 from sqlalchemy import create_engine, text
@@ -26,6 +28,11 @@ class MSSQLWriter:
         if self._engine is None:
             # fast_executemany=True is THE optimization for bulk inserts on MSSQL
             # via pyodbc -- the difference between ~100 rows/sec and 50k rows/sec.
+            logger.debug(
+                "MSSQLWriter: creating engine for %s/%s (fast_executemany)",
+                self.conn.server,
+                self.conn.database,
+            )
             self._engine = create_engine(
                 self.conn.sqlalchemy_url(),
                 fast_executemany=True,
@@ -35,6 +42,7 @@ class MSSQLWriter:
 
     def close(self) -> None:
         if self._engine is not None:
+            logger.debug("MSSQLWriter: disposing engine for %s/%s", self.conn.server, self.conn.database)
             try:
                 self._engine.dispose()
             finally:
@@ -63,7 +71,16 @@ class MSSQLWriter:
             logger.warning("append() called with empty DataFrame for %s -- skipping.", table)
             return 0
 
-        if not self.table_exists(table):
+        exists = self.table_exists(table)
+        logger.debug(
+            "append: target [%s].[%s] exists=%s rows=%d batch_size=%d",
+            self.schema,
+            table,
+            exists,
+            len(df),
+            batch_size,
+        )
+        if not exists:
             raise RuntimeError(
                 f"Target table [{self.schema}].[{table}] does not exist. "
                 "kubota-synth APPENDS to existing tables -- it will never create them. "
@@ -73,6 +90,17 @@ class MSSQLWriter:
                 f"  FROM [<source-server>].[<source-db>].{self.schema}.{table};\n"
             )
 
+        n = len(df)
+        batches = max(1, math.ceil(n / int(batch_size)))
+        t0 = time.perf_counter()
+        logger.info(
+            "Appending %d row(s) to [%s].[%s] in ~%d batch(es) of up to %d.",
+            n,
+            self.schema,
+            table,
+            batches,
+            int(batch_size),
+        )
         try:
             df.to_sql(
                 name=table,
@@ -87,12 +115,27 @@ class MSSQLWriter:
             logger.exception("Failed to append %d rows to %s.%s.", len(df), self.schema, table)
             raise
 
-        logger.info("Appended %d rows to [%s].[%s].", len(df), self.schema, table)
+        elapsed = time.perf_counter() - t0
+        rps = (n / elapsed) if elapsed > 0 else float(n)
+        logger.info(
+            "Appended %d rows to [%s].[%s] in %.2fs (~%.0f rows/s).",
+            n,
+            self.schema,
+            table,
+            elapsed,
+            rps,
+        )
         return len(df)
 
 
 def write_synthetic(table_name: str, df: pd.DataFrame, cfg: ProjectConfig) -> int:
     """High-level helper used by the CLI to write synthetic rows to MSSQL."""
+    logger.debug(
+        "write_synthetic: table=%s target_schema=%s batch_size=%s",
+        table_name,
+        cfg.target_schema,
+        cfg.batch_size,
+    )
     writer = MSSQLWriter(cfg.target, schema=cfg.target_schema)
     try:
         return writer.append(table_name, df, batch_size=cfg.batch_size)

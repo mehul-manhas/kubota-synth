@@ -63,6 +63,13 @@ def build_synthesizer(table_cfg: TableConfig, table_metadata: dict[str, Any]):
         if table_cfg.epochs is not None:
             kwargs["epochs"] = int(table_cfg.epochs)
 
+    logger.debug(
+        "build_synthesizer: %s (%s) epochs=%s extra_table_keys=%s",
+        name,
+        cls.__name__,
+        kwargs.get("epochs"),
+        sorted(table_cfg.extra.keys()) if table_cfg.extra else [],
+    )
     synth = cls(metadata=metadata, **kwargs)
 
     if constraints:

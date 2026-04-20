@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 
 import pandas as pd
 from sqlalchemy import create_engine, text
@@ -26,11 +27,18 @@ class DataLoader:
     @property
     def engine(self) -> Engine:
         if self._engine is None:
+            logger.debug(
+                "DataLoader: creating engine for %s/%s schema=%s",
+                self.conn.server,
+                self.conn.database,
+                self.schema,
+            )
             self._engine = create_engine(self.conn.sqlalchemy_url(), pool_pre_ping=True)
         return self._engine
 
     def close(self) -> None:
         if self._engine is not None:
+            logger.debug("DataLoader: disposing engine for %s/%s", self.conn.server, self.conn.database)
             try:
                 self._engine.dispose()
             finally:
@@ -59,13 +67,22 @@ class DataLoader:
 
             SELECT TOP (<sample>) * FROM [schema].[table] TABLESAMPLE (<pct> PERCENT)
         """
+        t0 = time.perf_counter()
         total = self.row_count(table)
         logger.info("Table %s.%s has %d rows.", self.schema, table, total)
 
         if sample_size is None or total <= sample_size:
             sql = f"SELECT * FROM [{self.schema}].[{table}]"
             logger.info("Loading entire table %s (%d rows).", table, total)
-            return pd.read_sql(sql, self.engine)
+            logger.debug("DataLoader SQL: %s", sql[:500] + ("..." if len(sql) > 500 else ""))
+            df = pd.read_sql(sql, self.engine)
+            logger.info(
+                "Loaded %d rows from %s in %.2fs (full table).",
+                len(df),
+                table,
+                time.perf_counter() - t0,
+            )
+            return df
 
         # Overshoot by 20 % to compensate for TABLESAMPLE variance, then cap.
         pct = min(100.0, (sample_size / max(total, 1)) * 100 * 1.2)
@@ -76,6 +93,7 @@ class DataLoader:
         logger.info(
             "Sampling %s: target=%d rows (%.4f%% TABLESAMPLE).", table, sample_size, pct
         )
+        logger.debug("DataLoader SQL: %s", sql)
         df = pd.read_sql(sql, self.engine)
 
         if len(df) < sample_size * 0.5:
@@ -89,7 +107,13 @@ class DataLoader:
                 f"SELECT TOP ({int(sample_size)}) * FROM [{self.schema}].[{table}] "
                 "ORDER BY NEWID()"
             )
+            logger.debug("DataLoader fallback SQL: %s", sql)
             df = pd.read_sql(sql, self.engine)
 
-        logger.info("Loaded %d rows from %s.", len(df), table)
+        logger.info(
+            "Loaded %d rows from %s in %.2fs.",
+            len(df),
+            table,
+            time.perf_counter() - t0,
+        )
         return df

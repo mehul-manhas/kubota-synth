@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import sys
+import time
 from pathlib import Path
 
 import click
@@ -57,9 +58,12 @@ def _configure_logging(level: str) -> None:
             omit_repeated_times=False,
         )
     )
+    # Ensure package loggers emit at the chosen verbosity (CLI uses logger name kubota_synth.*).
+    logging.getLogger("kubota_synth").setLevel(numeric_level)
     # Reduce SQLAlchemy spam unless user explicitly wants debug.
     if numeric_level > logging.DEBUG:
         logging.getLogger("sqlalchemy").setLevel(logging.WARNING)
+        logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +145,12 @@ def cli(log_level: str) -> None:
 )
 def introspect(config_path: str, output_path: str) -> None:
     """Read the source MSSQL schema and emit an SDV metadata JSON."""
+    logger.info(
+        "introspect: config=%s output=%s",
+        Path(config_path).resolve(),
+        Path(output_path).resolve(),
+    )
+    t0 = time.perf_counter()
     cfg = _load_project(config_path)
     tables = list(cfg.tables.keys())
     if not tables:
@@ -172,6 +182,8 @@ def introspect(config_path: str, output_path: str) -> None:
     with out.open("w", encoding="utf-8") as fh:
         json.dump(metadata, fh, indent=2, default=str)
 
+    elapsed = time.perf_counter() - t0
+    logger.info("introspect: wrote %s (%.2fs)", out.resolve(), elapsed)
     console.print(f"[green]Wrote metadata for {len(tables)} table(s) -> {out}[/green]")
 
 
@@ -203,9 +215,21 @@ def introspect(config_path: str, output_path: str) -> None:
 )
 def train(config_path: str, metadata_path: str, table: str | None) -> None:
     """Train SDV synthesizers against the source database."""
+    logger.info(
+        "train: config=%s metadata=%s table_filter=%s",
+        Path(config_path).resolve(),
+        Path(metadata_path).resolve(),
+        table or "(all)",
+    )
+    t0 = time.perf_counter()
     cfg = _load_project(config_path)
     metadata = _load_metadata(metadata_path)
     tables = _resolve_tables(cfg, table)
+    logger.info(
+        "train: %d table(s) models_dir=%s",
+        len(tables),
+        cfg.models_dir.resolve(),
+    )
 
     summary_table = Table(title="Training summary")
     summary_table.add_column("Table", style="cyan")
@@ -215,13 +239,27 @@ def train(config_path: str, metadata_path: str, table: str | None) -> None:
 
     for tbl in tables:
         table_cfg = cfg.tables[tbl]
+        logger.info(
+            "train: starting table=%s synthesizer=%s fit_sample_size=%s",
+            tbl,
+            table_cfg.synthesizer,
+            table_cfg.fit_sample_size,
+        )
+        tbl_t0 = time.perf_counter()
         try:
             path = train_table(tbl, metadata, cfg)
+            logger.info(
+                "train: finished table=%s in %.2fs -> %s",
+                tbl,
+                time.perf_counter() - tbl_t0,
+                path,
+            )
             summary_table.add_row(tbl, table_cfg.synthesizer, "[green]ok[/green]", str(path))
         except Exception as exc:  # noqa: BLE001
             logger.exception("Training failed for table '%s': %s", tbl, exc)
             summary_table.add_row(tbl, table_cfg.synthesizer, f"[red]failed: {exc}[/red]", "-")
 
+    logger.info("train: complete %.2fs", time.perf_counter() - t0)
     console.print(summary_table)
 
 
@@ -307,12 +345,32 @@ def generate(
     relationships_path: str | None,
 ) -> None:
     """Sample synthetic rows, enforce business rules, validate, optionally write."""
+    logger.info(
+        "generate: config=%s metadata=%s table_filter=%s rows_override=%s write=%s "
+        "output_dir=%s validate=%s apply_relationships=%s",
+        Path(config_path).resolve(),
+        Path(metadata_path).resolve(),
+        table or "(all)",
+        rows,
+        write,
+        output_dir or "(config default)",
+        do_validate,
+        apply_rel,
+    )
+    gen_t0 = time.perf_counter()
     cfg = _load_project(config_path)
     metadata = _load_metadata(metadata_path)
     tables = _resolve_tables(cfg, table)
 
     out_dir = Path(output_dir) if output_dir else cfg.output_dir
     out_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(
+        "generate: %d table(s) CSV dir=%s target=%s/%s",
+        len(tables),
+        out_dir.resolve(),
+        cfg.target.server,
+        cfg.target.database,
+    )
 
     if not write:
         console.print(
@@ -321,18 +379,27 @@ def generate(
         )
 
     # -- 1. Sample every table into memory -------------------------------------
+    logger.info("generate: phase 1/3 sampling from trained models")
     sampled: dict[str, pd.DataFrame] = {}
     errors: dict[str, str] = {}
     for tbl in tables:
         table_cfg = cfg.tables[tbl]
         target_rows = rows if rows is not None else table_cfg.sample_rows
+        s_t0 = time.perf_counter()
         try:
             sampled[tbl] = sample_table(tbl, cfg, rows=target_rows)
+            logger.debug(
+                "generate: sampled %s (%d rows) in %.2fs",
+                tbl,
+                len(sampled[tbl]),
+                time.perf_counter() - s_t0,
+            )
         except Exception as exc:  # noqa: BLE001
             logger.exception("Sampling failed for table '%s': %s", tbl, exc)
             errors[tbl] = str(exc)
 
     # -- 2. Apply business-relationship rules across tables --------------------
+    logger.info("generate: phase 2/3 business relationships")
     relationships_applied = False
     relationships_summary: str = "disabled"
     if apply_rel:
@@ -348,6 +415,11 @@ def generate(
                 )
             else:
                 seed = int(cfg.defaults.get("random_seed", 42))
+                logger.info(
+                    "generate: applying relationships from %s (seed=%s)",
+                    rel_path.resolve(),
+                    seed,
+                )
                 console.print(
                     f"[bold]Applying business relationships[/bold] from [cyan]{rel_path}[/cyan]..."
                 )
@@ -366,6 +438,11 @@ def generate(
         console.print("[yellow]--no-apply-relationships: skipping post-processing.[/yellow]")
 
     # -- 3. Per-table: CSV snapshot, validation, optional DB write ------------
+    logger.info(
+        "generate: phase 3/3 CSV / validation=%s / db_write=%s",
+        do_validate,
+        write,
+    )
     summary_table = Table(title="Generation summary")
     summary_table.add_column("Table", style="cyan")
     summary_table.add_column("Generated", justify="right")
@@ -406,7 +483,12 @@ def generate(
         try:
             generated = len(df)
             df.to_csv(csv_path, index=False)
-            logger.info("Wrote CSV sample for '%s' -> %s", tbl, csv_path)
+            logger.info(
+                "generate: CSV %s (%d rows) -> %s",
+                tbl,
+                generated,
+                csv_path.resolve(),
+            )
 
             if do_validate:
                 report = _validate_against_real(tbl, df, metadata, cfg)
@@ -420,7 +502,14 @@ def generate(
                         logger.warning("[%s] %s", tbl, issue)
 
             if write:
+                w_t0 = time.perf_counter()
                 written = write_synthetic(tbl, df, cfg)
+                logger.info(
+                    "generate: wrote %d row(s) to target for %s in %.2fs",
+                    written,
+                    tbl,
+                    time.perf_counter() - w_t0,
+                )
 
             summary_table.add_row(
                 tbl,
@@ -447,6 +536,11 @@ def generate(
 
     console.print(summary_table)
     console.print(f"[dim]Business relationships: {relationships_summary}[/dim]")
+    logger.info(
+        "generate: finished in %.2fs (relationships=%s)",
+        time.perf_counter() - gen_t0,
+        relationships_summary,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -468,6 +562,12 @@ def _validate_against_real(
         return None
 
     sample_size = max(len(synthetic_df), 10_000)
+    logger.info(
+        "validation: loading up to %d real rows for '%s' from source",
+        sample_size,
+        table_name,
+    )
+    v_t0 = time.perf_counter()
     try:
         with DataLoader(cfg.source, schema=cfg.source.schema) as loader:
             real_df = loader.load(table_name, sample_size=sample_size)
@@ -475,7 +575,25 @@ def _validate_against_real(
         logger.warning("Could not load real data for '%s' validation: %s", table_name, exc)
         return None
 
-    return validate_table(table_name, real_df, synthetic_df, table_metadata)
+    logger.debug(
+        "validation: loaded %d real rows for '%s' in %.2fs",
+        len(real_df),
+        table_name,
+        time.perf_counter() - v_t0,
+    )
+    report = validate_table(table_name, real_df, synthetic_df, table_metadata)
+    if report is not None:
+        logger.info(
+            "validation: %s quality=%s diagnostic=%s issues=%d real_rows=%d synth_rows=%d (%.2fs)",
+            table_name,
+            report.get("quality_score"),
+            report.get("diagnostic_score"),
+            len(report.get("issues") or []),
+            report.get("real_rows"),
+            report.get("synthetic_rows"),
+            time.perf_counter() - v_t0,
+        )
+    return report
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 from typing import Any
 
@@ -64,27 +65,60 @@ def train_table(
 
     logger.info("Training %s synthesizer for table '%s'...", table_cfg.synthesizer, table_name)
 
+    load_t0 = time.perf_counter()
     with DataLoader(cfg.source, schema=cfg.source.schema) as loader:
         df = loader.load(table_name, sample_size=table_cfg.fit_sample_size)
+    load_elapsed = time.perf_counter() - load_t0
+    logger.info(
+        "train_table: loaded %d row(s) for '%s' in %.2fs",
+        len(df),
+        table_name,
+        load_elapsed,
+    )
 
     if df.empty:
         raise RuntimeError(
             f"No training data loaded for '{table_name}'. Refusing to fit an empty model."
         )
 
+    coerce_t0 = time.perf_counter()
     df = _coerce_dtypes(df, table_metadata)
+    logger.debug(
+        "train_table: coerced dtypes for '%s' in %.2fs (%d columns)",
+        table_name,
+        time.perf_counter() - coerce_t0,
+        len(df.columns),
+    )
 
     synth = build_synthesizer(table_cfg, table_metadata)
+    fit_t0 = time.perf_counter()
+    logger.info("train_table: fitting SDV model for '%s'...", table_name)
     synth.fit(df)
+    fit_elapsed = time.perf_counter() - fit_t0
+    logger.info(
+        "train_table: fit complete for '%s' in %.2fs (rows=%d)",
+        table_name,
+        fit_elapsed,
+        len(df),
+    )
 
     cfg.models_dir.mkdir(parents=True, exist_ok=True)
     model_path = cfg.models_dir / f"{table_name}.pkl"
+    save_t0 = time.perf_counter()
     synth.save(str(model_path))
+    logger.debug(
+        "train_table: saved model for '%s' in %.2fs -> %s",
+        table_name,
+        time.perf_counter() - save_t0,
+        model_path.resolve(),
+    )
 
     logger.info(
-        "Trained synthesizer for '%s' on %d rows; saved to %s.",
+        "Trained synthesizer for '%s' on %d rows; saved to %s (load %.2fs + fit %.2fs).",
         table_name,
         len(df),
         model_path,
+        load_elapsed,
+        fit_elapsed,
     )
     return model_path

@@ -224,10 +224,16 @@ def load_config(path: str | Path) -> ProjectConfig:
         defaults=dict(defaults),
     )
 
-    logger.debug(
-        "Loaded config with %d tables (source=%s target=%s)",
+    logger.info(
+        "Loaded config %s: %d table(s), source=%s/%s target=%s/%s, models_dir=%s output_dir=%s",
+        path.resolve(),
         len(cfg.tables),
+        cfg.source.server,
         cfg.source.database,
+        cfg.target.server,
         cfg.target.database,
+        cfg.models_dir.resolve(),
+        cfg.output_dir.resolve(),
     )
+    logger.debug("Table names: %s", list(cfg.tables.keys()))
     return cfg

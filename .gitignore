@@ -74,3 +74,4 @@ dmypy.json
 artifacts/models/*.pkl
 artifacts/output/*.csv
 metadata.json
+.lock

@@ -13,6 +13,7 @@ volumes so domain experts can audit what happened.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -389,7 +390,15 @@ def apply_relationships(
         logger.info("No business relationships to enforce.")
         return tables
 
+    t0 = time.perf_counter()
     rng = np.random.default_rng(seed)
+    logger.info(
+        "apply_relationships: %d funnel chain(s), %d seasonality rule(s), rng_seed=%s, tables=%s",
+        len(relationships.funnel_chains),
+        len(relationships.seasonality),
+        seed,
+        list(tables.keys()),
+    )
 
     for chain in relationships.funnel_chains:
         logger.info("Applying funnel chain '%s'.", chain.name)
@@ -399,4 +408,5 @@ def apply_relationships(
         logger.info("Applying seasonality rule '%s'.", rule.name)
         tables = apply_seasonality(tables, rule)
 
+    logger.info("apply_relationships: finished in %.2fs", time.perf_counter() - t0)
     return tables

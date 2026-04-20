@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -32,7 +33,16 @@ def _load_synth(cfg: ProjectConfig, table_name: str):
     if cls is None:
         raise ValueError(f"Unknown synthesizer {name!r} for table {table_name!r}.")
     path = _model_path(cfg, table_name)
-    return cls.load(str(path))
+    t0 = time.perf_counter()
+    synth = cls.load(str(path))
+    logger.debug(
+        "Loaded %s model for '%s' from %s in %.2fs",
+        name,
+        table_name,
+        path.resolve(),
+        time.perf_counter() - t0,
+    )
+    return synth
 
 
 def sample_table(
@@ -46,6 +56,7 @@ def sample_table(
 
     synth = _load_synth(cfg, table_name)
 
+    sample_t0 = time.perf_counter()
     if table_cfg.synthesizer == "PAR":
         num_sequences = max(1, n // 100)
         logger.info(
@@ -59,7 +70,12 @@ def sample_table(
         logger.info("Sampling %d rows from '%s'.", n, table_name)
         df = synth.sample(num_rows=n)
 
-    logger.info("Produced %d synthetic rows for '%s'.", len(df), table_name)
+    logger.info(
+        "Produced %d synthetic rows for '%s' in %.2fs.",
+        len(df),
+        table_name,
+        time.perf_counter() - sample_t0,
+    )
     return df
 
 
@@ -84,6 +100,12 @@ def sample_conditional(
         table_name,
         len(sdv_conditions),
     )
+    c_t0 = time.perf_counter()
     df = synth.sample_from_conditions(conditions=sdv_conditions)
-    logger.info("Produced %d conditional synthetic rows for '%s'.", len(df), table_name)
+    logger.info(
+        "Produced %d conditional synthetic rows for '%s' in %.2fs.",
+        len(df),
+        table_name,
+        time.perf_counter() - c_t0,
+    )
     return df
